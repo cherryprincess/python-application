@@ -1,5 +1,28 @@
-# Use latest secure Python version with distroless approach
-FROM python:3.12.6-slim-bookworm
+# Multi-stage build for security
+FROM python:3.12.6-alpine3.20 AS builder
+
+# Set security-focused environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Install build dependencies
+RUN apk add --no-cache \
+    gcc \
+    musl-dev \
+    linux-headers
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip==24.2 && \
+    pip install --no-cache-dir --user -r requirements.txt
+
+# Production stage
+FROM python:3.12.6-alpine3.20
 
 # Set metadata
 LABEL maintainer="github-copilot" \
@@ -9,26 +32,23 @@ LABEL maintainer="github-copilot" \
 # Set security-focused environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PATH="/home/appuser/.local/bin:$PATH"
 
 # Create non-root user for security
-RUN groupadd -r appuser --gid=1001 && \
-    useradd -r -g appuser --uid=1001 --home-dir=/app --shell=/bin/bash appuser
+RUN addgroup -g 1001 appuser && \
+    adduser -D -u 1001 -G appuser appuser
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies and security updates with minimal attack surface
-RUN apt-get update && \
-    apt-get upgrade -y && \
-    apt-get install -y --no-install-recommends \
-        gcc \
-        libc6-dev \
-        ca-certificates && \
-    apt-get autoremove -y && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/cache/apt/archives/*
+# Install runtime dependencies only
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata && \
+    rm -rf /var/cache/apk/*
+
+# Copy Python packages from builder stage
+COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 
 # Copy requirements first for better caching
 COPY requirements.txt .
