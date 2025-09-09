@@ -1,0 +1,211 @@
+name: Build, Scan, and Deploy to AKS
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY_NAME: ${{ secrets.REGISTRY_LOGIN_SERVER }}
+  IMAGE_NAME: python-app
+  NAMESPACE: github-copilot-ns
+  DEPLOYMENT_NAME: python-app-deployment
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.build-info.outputs.image-tag }}
+      image-full-name: ${{ steps.build-info.outputs.image-full-name }}
+    
+    steps:
+    # Setup job and checkout code
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # Generate build information
+    - name: Generate build information
+      id: build-info
+      run: |
+        BUILD_ID="${{ github.run_number }}-${{ github.sha }}"
+        IMAGE_TAG="build-${BUILD_ID}"
+        IMAGE_FULL_NAME="${{ secrets.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+        
+        echo "build-id=${BUILD_ID}" >> $GITHUB_OUTPUT
+        echo "image-tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        echo "image-full-name=${IMAGE_FULL_NAME}" >> $GITHUB_OUTPUT
+        
+        echo "Build ID: ${BUILD_ID}"
+        echo "Image Tag: ${IMAGE_TAG}"
+        echo "Full Image Name: ${IMAGE_FULL_NAME}"
+
+    # Install Azure CLI
+    - name: Install Azure CLI
+      run: |
+        curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+        az version
+
+    # Install additional dependencies
+    - name: Install additional dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y curl wget jq
+
+    # Install Trivy security scanner
+    - name: Install Trivy security scanner
+      run: |
+        sudo apt-get update
+        sudo apt-get install wget apt-transport-https gnupg lsb-release
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+        echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+        sudo apt-get update
+        sudo apt-get install trivy
+        trivy --version
+
+    # Log into Azure Container Registry
+    - name: Log into Azure Container Registry
+      run: |
+        echo ${{ secrets.REGISTRY_PASSWORD }} | docker login ${{ secrets.REGISTRY_LOGIN_SERVER }} -u ${{ secrets.REGISTRY_USERNAME }} --password-stdin
+
+    # Build Docker image
+    - name: Build Docker image
+      run: |
+        docker build -t ${{ steps.build-info.outputs.image-full-name }} .
+        echo "Docker image built successfully: ${{ steps.build-info.outputs.image-full-name }}"
+
+    # Scan Docker image with Trivy for vulnerabilities
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        image-ref: ${{ steps.build-info.outputs.image-full-name }}
+        format: 'table'
+        exit-code: '1'
+        severity: 'CRITICAL,HIGH'
+        ignore-unfixed: true
+
+    # Push Docker image to ACR
+    - name: Push Docker image to ACR
+      run: |
+        docker push ${{ steps.build-info.outputs.image-full-name }}
+        echo "Docker image pushed successfully to ACR"
+
+    # Scan pushed image for additional security check
+    - name: Scan pushed image in registry
+      run: |
+        trivy image --severity CRITICAL,HIGH --exit-code 1 --no-progress ${{ steps.build-info.outputs.image-full-name }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    
+    steps:
+    # Setup job and checkout code
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # Install Azure CLI
+    - name: Install Azure CLI
+      run: |
+        curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+        az version
+
+    # Login to Azure using service principal
+    - name: Azure Login
+      run: |
+        az login --service-principal \
+          --username ${{ secrets.AZURE_CLIENT_ID }} \
+          --password ${{ secrets.AZURE_CLIENT_SECRET }} \
+          --tenant ${{ secrets.AZURE_TENANT_ID }}
+        az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    # Get AKS credentials
+    - name: Get AKS credentials
+      run: |
+        az aks get-credentials \
+          --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
+          --name ${{ secrets.AKS_CLUSTER_NAME }} \
+          --overwrite-existing
+
+    # Verify kubectl connection
+    - name: Verify kubectl connection
+      run: |
+        kubectl version --client
+        kubectl get nodes
+
+    # Create namespace if it doesn't exist
+    - name: Create namespace
+      run: |
+        kubectl apply -f k8s/namespace.yaml || echo "Namespace may already exist"
+
+    # Deploy ConfigMap
+    - name: Deploy ConfigMap
+      run: |
+        kubectl apply -f k8s/configmap.yaml
+
+    # Deploy ServiceAccount
+    - name: Deploy ServiceAccount
+      run: |
+        kubectl apply -f k8s/serviceaccount.yaml
+
+    # Deploy Service
+    - name: Deploy Service
+      run: |
+        kubectl apply -f k8s/service.yaml
+
+    # Deploy NetworkPolicy
+    - name: Deploy NetworkPolicy
+      run: |
+        kubectl apply -f k8s/networkpolicy.yaml
+
+    # Deploy PodDisruptionBudget
+    - name: Deploy PodDisruptionBudget
+      run: |
+        kubectl apply -f k8s/poddisruptionbudget.yaml
+
+    # Update deployment with new image
+    - name: Update deployment with new image
+      run: |
+        # Apply the deployment file first
+        kubectl apply -f k8s/deployment.yaml
+        
+        # Update the image in the deployment
+        kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
+          python-app=${{ needs.build.outputs.image-full-name }} \
+          -n ${{ env.NAMESPACE }}
+        
+        # Wait for rollout to complete
+        kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} -n ${{ env.NAMESPACE }} --timeout=600s
+
+    # Verify deployment
+    - name: Verify deployment
+      run: |
+        echo "Checking deployment status..."
+        kubectl get deployments -n ${{ env.NAMESPACE }}
+        kubectl get pods -n ${{ env.NAMESPACE }}
+        kubectl get services -n ${{ env.NAMESPACE }}
+        
+        echo "Checking pod health..."
+        kubectl wait --for=condition=ready pod -l app=python-app -n ${{ env.NAMESPACE }} --timeout=300s
+        
+        echo "Deployment completed successfully!"
+
+    # Run post-deployment security scan
+    - name: Post-deployment security validation
+      run: |
+        echo "Running post-deployment security checks..."
+        
+        # Check security contexts
+        kubectl get pods -n ${{ env.NAMESPACE }} -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.securityContext.runAsNonRoot}{"\n"}{end}'
+        
+        # Check resource limits
+        kubectl describe deployment ${{ env.DEPLOYMENT_NAME }} -n ${{ env.NAMESPACE }} | grep -A 10 "Limits\|Requests" || true
+        
+        echo "Security validation completed!"
+
+    # Cleanup old images (optional)
+    - name: Cleanup old images
+      run: |
+        echo "Current deployment uses image: ${{ needs.build.outputs.image-full-name }}"
+        echo "Cleanup of old images can be implemented here if needed"
