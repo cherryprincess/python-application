@@ -2,7 +2,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: python-app-netpol
-  namespace: github_copilot_ns
+  namespace: github-copilot-ns
 spec:
   podSelector:
     matchLabels:
@@ -14,7 +14,7 @@ spec:
   - from:
     - namespaceSelector:
         matchLabels:
-          name: github_copilot_ns
+          name: github-copilot-ns
     - podSelector: {}
     ports:
     - protocol: TCP

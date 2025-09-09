@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: python-app-deployment
-  namespace: github_copilot_ns
+  namespace: github-copilot-ns
   labels:
     app: python-app
     environment: production

@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: github_copilot_ns
+  name: github-copilot-ns
   labels:
-    name: github_copilot_ns
+    name: github-copilot-ns
     environment: production
