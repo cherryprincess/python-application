@@ -87,21 +87,33 @@ jobs:
         docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
         echo "Docker image built successfully: ${IMAGE_NAME}:${IMAGE_TAG}"
     
-    - name: Scan Docker image with Trivy
+    - name: Scan Docker image with Trivy (Informational)
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        image-ref: '${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}'
+        format: 'table'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+        exit-code: '0'
+        output: 'trivy-results.txt'
+      continue-on-error: true
+    
+    - name: Scan for CRITICAL/HIGH vulnerabilities only
       uses: aquasecurity/trivy-action@0.28.0
       with:
         image-ref: '${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}'
         format: 'table'
         severity: 'CRITICAL,HIGH'
         exit-code: '1'
-        output: 'trivy-results.txt'
+        output: 'trivy-critical-high.txt'
     
     - name: Upload Trivy scan results
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: trivy-scan-results
-        path: trivy-results.txt
+        path: |
+          trivy-results.txt
+          trivy-critical-high.txt
     
     - name: Push Docker image to registry
       run: |

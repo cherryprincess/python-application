@@ -1,34 +1,43 @@
-# Use specific Python version instead of latest
-FROM python:3.11.9-slim-bullseye
+# Use latest secure Python version with distroless approach
+FROM python:3.12.6-slim-bookworm
 
 # Set metadata
 LABEL maintainer="github-copilot" \
       description="Secure Python Flask Application" \
       version="1.0.0"
 
+# Set security-focused environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
 # Create non-root user for security
-RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /bin/bash appuser
+RUN groupadd -r appuser --gid=1001 && \
+    useradd -r -g appuser --uid=1001 --home-dir=/app --shell=/bin/bash appuser
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies and security updates
+# Install system dependencies and security updates with minimal attack surface
 RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
         gcc \
-        libc6-dev && \
+        libc6-dev \
+        ca-certificates && \
+    apt-get autoremove -y && \
     apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/cache/apt/archives/*
 
 # Copy requirements first for better caching
 COPY requirements.txt .
 
 # Upgrade pip and install Python dependencies with security fixes
-RUN pip install --no-cache-dir --upgrade pip==24.0 && \
+RUN pip install --no-cache-dir --upgrade pip==24.2 && \
     pip install --no-cache-dir --upgrade setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir --upgrade urllib3==2.0.7 certifi==2023.11.17
+    pip install --no-cache-dir --upgrade urllib3==2.2.3 certifi==2024.8.30 requests==2.32.3
 
 # Copy application code
 COPY app.py .
