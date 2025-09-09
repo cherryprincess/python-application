@@ -32,7 +32,8 @@ jobs:
     - name: Generate build information
       id: build-info
       run: |
-        BUILD_ID="${{ github.run_number }}-${{ github.sha::8 }}"
+        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+        BUILD_ID="${{ github.run_number }}-${SHORT_SHA}"
         IMAGE_TAG="$BUILD_ID"
         echo "build-id=$BUILD_ID" >> $GITHUB_OUTPUT
         echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
