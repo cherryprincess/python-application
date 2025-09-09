@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: github_copilot_ns
+  labels:
+    app: python-app
+    environment: production
+data:
+  DEBUG: "false"
+  HOST: "0.0.0.0"
+  PORT: "8080"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
