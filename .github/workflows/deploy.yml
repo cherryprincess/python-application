@@ -32,13 +32,19 @@ jobs:
         IMAGE_TAG="build-${BUILD_ID}"
         IMAGE_FULL_NAME="${{ secrets.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
         
+        # Set outputs
         echo "build-id=${BUILD_ID}" >> $GITHUB_OUTPUT
         echo "image-tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
         echo "image-full-name=${IMAGE_FULL_NAME}" >> $GITHUB_OUTPUT
         
+        # Debug output
+        echo "=== Build Information ==="
         echo "Build ID: ${BUILD_ID}"
         echo "Image Tag: ${IMAGE_TAG}"
         echo "Full Image Name: ${IMAGE_FULL_NAME}"
+        echo "Registry: ${{ secrets.REGISTRY_LOGIN_SERVER }}"
+        echo "Image Name: ${{ env.IMAGE_NAME }}"
+        echo "========================="
 
     # Install Azure CLI
     - name: Install Azure CLI
@@ -105,6 +111,14 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    # Debug: Check job outputs from build
+    - name: Debug build outputs
+      run: |
+        echo "=== Deploy Job Debug Information ==="
+        echo "Image Tag from build job: ${{ needs.build.outputs.image-tag }}"
+        echo "Full Image Name from build job: ${{ needs.build.outputs.image-full-name }}"
+        echo "===================================="
+
     # Install Azure CLI
     - name: Install Azure CLI
       run: |
@@ -167,12 +181,22 @@ jobs:
     # Update deployment with new image
     - name: Update deployment with new image
       run: |
+        # Get the image name from build job
+        IMAGE_FULL_NAME="${{ needs.build.outputs.image-full-name }}"
+        echo "Using image: ${IMAGE_FULL_NAME}"
+        
+        # Verify image name is not empty
+        if [ -z "${IMAGE_FULL_NAME}" ]; then
+          echo "Error: Image name is empty!"
+          exit 1
+        fi
+        
         # Apply the deployment file first
         kubectl apply -f k8s/deployment.yaml
         
         # Update the image in the deployment
         kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
-          python-app=${{ needs.build.outputs.image-full-name }} \
+          python-app="${IMAGE_FULL_NAME}" \
           -n ${{ env.NAMESPACE }}
         
         # Wait for rollout to complete
