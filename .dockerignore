@@ -1,0 +1,91 @@
+# Ignore git and version control files
+.git
+.gitignore
+.github
+
+# Ignore Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Ignore virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# Ignore IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Ignore OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Ignore logs and temporary files
+*.log
+logs/
+*.tmp
+*.temp
+
+# Ignore test and coverage files
+.coverage
+.pytest_cache/
+.tox/
+htmlcov/
+.nyc_output
+
+# Ignore documentation
+docs/
+*.md
+README*
+
+# Ignore deployment and config files
+docker-compose.yml
+docker-compose.yaml
+*.env
+.env.*
+
+# Ignore CI/CD files
+.github/
+.gitlab-ci.yml
+Jenkinsfile
+azure-pipelines.yml
+
+# Ignore Kubernetes files
+k8s/
+kubernetes/
+*.yaml
+*.yml
+
+# Ignore security and secrets
+secrets/
+certs/
+*.pem
+*.key
+*.crt
