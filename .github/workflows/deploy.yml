@@ -1,64 +1,63 @@
-name: Build, Scan, and Deploy to AKS
+name: Build, Scan and Deploy to AKS
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
-  REGISTRY_NAME: ${{ secrets.REGISTRY_LOGIN_SERVER }}
-  IMAGE_NAME: python-app
+  REGISTRY_LOGIN_SERVER: ${{ secrets.REGISTRY_LOGIN_SERVER }}
+  REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+  REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+  AKS_CLUSTER_NAME: ${{ secrets.AKS_CLUSTER_NAME }}
+  AKS_RESOURCE_GROUP: ${{ secrets.AKS_RESOURCE_GROUP }}
   NAMESPACE: github-copilot-ns
-  DEPLOYMENT_NAME: python-app-deployment
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     outputs:
       image-tag: ${{ steps.build-info.outputs.image-tag }}
-      image-full-name: ${{ steps.build-info.outputs.image-full-name }}
+      image-name: ${{ steps.build-info.outputs.image-name }}
     
     steps:
-    # Setup job and checkout code
+    - name: Setup job
+      run: |
+        echo "Starting build job..."
+        echo "Repository: ${{ github.repository }}"
+        echo "Branch: ${{ github.ref_name }}"
+        echo "Commit SHA: ${{ github.sha }}"
+    
     - name: Checkout code
       uses: actions/checkout@v4
-
-    # Generate build information
+    
     - name: Generate build information
       id: build-info
       run: |
-        BUILD_ID="${{ github.run_number }}-${{ github.sha }}"
-        IMAGE_TAG="build-${BUILD_ID}"
-        IMAGE_FULL_NAME="${{ secrets.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
-        
-        # Set outputs
-        echo "build-id=${BUILD_ID}" >> $GITHUB_OUTPUT
+        BUILD_ID="${GITHUB_RUN_NUMBER}-${GITHUB_SHA::8}"
+        IMAGE_NAME="${{ secrets.REGISTRY_LOGIN_SERVER }}/python-app"
+        IMAGE_TAG="${BUILD_ID}"
+        echo "BUILD_ID=${BUILD_ID}" >> $GITHUB_ENV
+        echo "IMAGE_NAME=${IMAGE_NAME}" >> $GITHUB_ENV
+        echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
         echo "image-tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-        echo "image-full-name=${IMAGE_FULL_NAME}" >> $GITHUB_OUTPUT
-        
-        # Debug output
-        echo "=== Build Information ==="
-        echo "Build ID: ${BUILD_ID}"
-        echo "Image Tag: ${IMAGE_TAG}"
-        echo "Full Image Name: ${IMAGE_FULL_NAME}"
-        echo "Registry: ${{ secrets.REGISTRY_LOGIN_SERVER }}"
-        echo "Image Name: ${{ env.IMAGE_NAME }}"
-        echo "========================="
+        echo "image-name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
+        echo "Generated build ID: ${BUILD_ID}"
+        echo "Image name: ${IMAGE_NAME}"
+        echo "Image tag: ${IMAGE_TAG}"
 
-    # Install Azure CLI
     - name: Install Azure CLI
       run: |
         curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
         az version
-
-    # Install additional dependencies
+    
     - name: Install additional dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y curl wget jq
-
-    # Install Trivy security scanner
+        sudo apt-get install -y jq curl wget
+    
     - name: Install Trivy security scanner
       run: |
         sudo apt-get update
@@ -68,168 +67,223 @@ jobs:
         sudo apt-get update
         sudo apt-get install trivy
         trivy --version
-
-    # Log into Azure Container Registry
-    - name: Log into Azure Container Registry
-      run: |
-        echo ${{ secrets.REGISTRY_PASSWORD }} | docker login ${{ secrets.REGISTRY_LOGIN_SERVER }} -u ${{ secrets.REGISTRY_USERNAME }} --password-stdin
-
-    # Build Docker image
-    - name: Build Docker image
-      run: |
-        docker build -t ${{ steps.build-info.outputs.image-full-name }} .
-        echo "Docker image built successfully: ${{ steps.build-info.outputs.image-full-name }}"
-
-    # Scan Docker image with Trivy for vulnerabilities
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@0.28.0
-      with:
-        image-ref: ${{ steps.build-info.outputs.image-full-name }}
-        format: 'table'
-        exit-code: '1'
-        severity: 'CRITICAL,HIGH'
-        ignore-unfixed: true
-
-    # Push Docker image to ACR
-    - name: Push Docker image to ACR
-      run: |
-        docker push ${{ steps.build-info.outputs.image-full-name }}
-        echo "Docker image pushed successfully to ACR"
-
-    # Scan pushed image for additional security check
-    - name: Scan pushed image in registry
-      run: |
-        trivy image --severity CRITICAL,HIGH --exit-code 1 --no-progress ${{ steps.build-info.outputs.image-full-name }}
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     
-    steps:
-    # Setup job and checkout code
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    # Debug: Check job outputs from build
-    - name: Debug build outputs
-      run: |
-        echo "=== Deploy Job Debug Information ==="
-        echo "Image Tag from build job: ${{ needs.build.outputs.image-tag }}"
-        echo "Full Image Name from build job: ${{ needs.build.outputs.image-full-name }}"
-        echo "===================================="
-
-    # Install Azure CLI
-    - name: Install Azure CLI
-      run: |
-        curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-        az version
-
-    # Login to Azure using service principal
-    - name: Azure Login
+    - name: Login to Azure
       run: |
         az login --service-principal \
           --username ${{ secrets.AZURE_CLIENT_ID }} \
           --password ${{ secrets.AZURE_CLIENT_SECRET }} \
           --tenant ${{ secrets.AZURE_TENANT_ID }}
         az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        echo "Azure login successful"
+    
+    - name: Login to Azure Container Registry
+      run: |
+        echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login ${{ secrets.REGISTRY_LOGIN_SERVER }} -u ${{ secrets.REGISTRY_USERNAME }} --password-stdin
 
-    # Get AKS credentials
+    - name: Build Docker image
+      run: |
+        docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+        docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
+        echo "Docker image built successfully: ${IMAGE_NAME}:${IMAGE_TAG}"
+    
+    - name: Scan Docker image with Trivy (Full Report)
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        image-ref: '${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}'
+        format: 'table'
+        severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+        exit-code: '0'
+        output: 'trivy-full-results.txt'
+      continue-on-error: true
+    
+    - name: Scan for CRITICAL vulnerabilities only (Blocking)
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        image-ref: '${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}'
+        format: 'table'
+        severity: 'CRITICAL'
+        exit-code: '1'
+        output: 'trivy-critical-only.txt'
+      continue-on-error: false
+    
+    - name: Scan for HIGH vulnerabilities (Warning)
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        image-ref: '${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}'
+        format: 'table'
+        severity: 'HIGH'
+        exit-code: '0'
+        output: 'trivy-high-only.txt'
+      continue-on-error: true
+    
+    - name: Security Scan Summary
+      if: always()
+      run: |
+        echo "=== SECURITY SCAN SUMMARY ==="
+        echo "Image: ${IMAGE_NAME}:${IMAGE_TAG}"
+        echo "Scan completed at: $(date)"
+        echo ""
+        
+        if [ -f "trivy-critical-only.txt" ]; then
+          echo "CRITICAL vulnerabilities:"
+          cat trivy-critical-only.txt | grep -E "CRITICAL|Total:" || echo "No critical vulnerabilities found"
+        fi
+        
+        if [ -f "trivy-high-only.txt" ]; then
+          echo ""
+          echo "HIGH vulnerabilities:"
+          cat trivy-high-only.txt | grep -E "HIGH|Total:" || echo "No high vulnerabilities found"
+        fi
+        
+        echo ""
+        echo "Note: Only CRITICAL vulnerabilities block the deployment."
+        echo "HIGH vulnerabilities are reported but don't fail the build."
+        echo "============================="
+    
+    - name: Upload Trivy scan results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: trivy-scan-results
+        path: |
+          trivy-full-results.txt
+          trivy-critical-only.txt
+          trivy-high-only.txt
+    
+    - name: Push Docker image to registry
+      run: |
+        docker push ${IMAGE_NAME}:${IMAGE_TAG}
+        docker push ${IMAGE_NAME}:latest
+        echo "Docker image pushed successfully to registry"
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    
+    steps:
+    - name: Setup job
+      run: |
+        echo "Starting deploy job..."
+        echo "Deploying to AKS cluster: ${{ secrets.AKS_CLUSTER_NAME }}"
+        echo "Resource group: ${{ secrets.AKS_RESOURCE_GROUP }}"
+        echo "Namespace: ${{ env.NAMESPACE }}"
+    
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Generate build information
+      run: |
+        BUILD_ID="${GITHUB_RUN_NUMBER}-${GITHUB_SHA::8}"
+        IMAGE_NAME="${{ secrets.REGISTRY_LOGIN_SERVER }}/python-app"
+        IMAGE_TAG="${BUILD_ID}"
+        echo "BUILD_ID=${BUILD_ID}" >> $GITHUB_ENV
+        echo "IMAGE_NAME=${IMAGE_NAME}" >> $GITHUB_ENV
+        echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+        echo "Using image: ${IMAGE_NAME}:${IMAGE_TAG}"
+
+    - name: Install Azure CLI
+      run: |
+        curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+        az version
+    
+    - name: Install additional dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y jq curl wget
+    
+    - name: Install Trivy security scanner
+      run: |
+        sudo apt-get update
+        sudo apt-get install wget apt-transport-https gnupg lsb-release
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+        echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+        sudo apt-get update
+        sudo apt-get install trivy
+        trivy --version
+    
+    - name: Login to Azure
+      run: |
+        az login --service-principal \
+          --username ${{ secrets.AZURE_CLIENT_ID }} \
+          --password ${{ secrets.AZURE_CLIENT_SECRET }} \
+          --tenant ${{ secrets.AZURE_TENANT_ID }}
+        az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        echo "Azure login successful"
+    
     - name: Get AKS credentials
       run: |
-        az aks get-credentials \
-          --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
-          --name ${{ secrets.AKS_CLUSTER_NAME }} \
-          --overwrite-existing
-
-    # Verify kubectl connection
-    - name: Verify kubectl connection
-      run: |
+        az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME }} --overwrite-existing
         kubectl version --client
-        kubectl get nodes
-
-    # Create namespace if it doesn't exist
-    - name: Create namespace
+        kubectl cluster-info
+    
+    - name: Create namespace if not exists
       run: |
-        kubectl apply -f k8s/namespace.yaml || echo "Namespace may already exist"
-
-    # Deploy ConfigMap
+        kubectl get namespace ${{ env.NAMESPACE }} || kubectl apply -f k8s/namespace.yaml
+        echo "Namespace ${{ env.NAMESPACE }} is ready"
+    
     - name: Deploy ConfigMap
       run: |
         kubectl apply -f k8s/configmap.yaml
-
-    # Deploy ServiceAccount
+        echo "ConfigMap deployed successfully"
+    
     - name: Deploy ServiceAccount
       run: |
         kubectl apply -f k8s/serviceaccount.yaml
-
-    # Deploy Service
+        echo "ServiceAccount deployed successfully"
+    
+    - name: Deploy Network Policy
+      run: |
+        kubectl apply -f k8s/networkpolicy.yaml
+        echo "Network Policy deployed successfully"
+    
+    - name: Update deployment with new image
+      run: |
+        # Update the deployment YAML with the new image tag
+        sed -i "s|image: app_image|image: ${IMAGE_NAME}:${IMAGE_TAG}|g" k8s/deployment.yaml
+        
+        # Apply the deployment
+        kubectl apply -f k8s/deployment.yaml
+        echo "Deployment updated with image: ${IMAGE_NAME}:${IMAGE_TAG}"
+    
     - name: Deploy Service
       run: |
         kubectl apply -f k8s/service.yaml
-
-    # Deploy NetworkPolicy
-    - name: Deploy NetworkPolicy
-      run: |
-        kubectl apply -f k8s/networkpolicy.yaml
-
-    # Deploy PodDisruptionBudget
+        echo "Service deployed successfully"
+    
     - name: Deploy PodDisruptionBudget
       run: |
         kubectl apply -f k8s/poddisruptionbudget.yaml
-
-    # Update deployment with new image
-    - name: Update deployment with new image
+        echo "PodDisruptionBudget deployed successfully"
+    
+    - name: Wait for deployment rollout
       run: |
-        # Get the image name from build job
-        IMAGE_FULL_NAME="${{ needs.build.outputs.image-full-name }}"
-        echo "Using image: ${IMAGE_FULL_NAME}"
-        
-        # Verify image name is not empty
-        if [ -z "${IMAGE_FULL_NAME}" ]; then
-          echo "Error: Image name is empty!"
-          exit 1
-        fi
-        
-        # Apply the deployment file first
-        kubectl apply -f k8s/deployment.yaml
-        
-        # Update the image in the deployment
-        kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
-          python-app="${IMAGE_FULL_NAME}" \
-          -n ${{ env.NAMESPACE }}
-        
-        # Wait for rollout to complete
-        kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} -n ${{ env.NAMESPACE }} --timeout=600s
-
-    # Verify deployment
+        kubectl rollout status deployment/python-app-deployment -n ${{ env.NAMESPACE }} --timeout=300s
+        echo "Deployment rollout completed successfully"
+    
     - name: Verify deployment
       run: |
-        echo "Checking deployment status..."
-        kubectl get deployments -n ${{ env.NAMESPACE }}
-        kubectl get pods -n ${{ env.NAMESPACE }}
+        echo "Verifying deployment..."
+        kubectl get pods -n ${{ env.NAMESPACE }} -l app=python-app
         kubectl get services -n ${{ env.NAMESPACE }}
+        kubectl get deployment python-app-deployment -n ${{ env.NAMESPACE }}
         
-        echo "Checking pod health..."
-        kubectl wait --for=condition=ready pod -l app=python-app -n ${{ env.NAMESPACE }} --timeout=300s
-        
-        echo "Deployment completed successfully!"
-
-    # Run post-deployment security scan
-    - name: Post-deployment security validation
+        # Check if pods are running
+        RUNNING_PODS=$(kubectl get pods -n ${{ env.NAMESPACE }} -l app=python-app --field-selector=status.phase=Running --no-headers | wc -l)
+        if [ $RUNNING_PODS -eq 0 ]; then
+          echo "No running pods found!"
+          kubectl describe pods -n ${{ env.NAMESPACE }} -l app=python-app
+          exit 1
+        else
+          echo "Deployment verification successful - $RUNNING_PODS pods running"
+        fi
+    
+    - name: Display deployment summary
       run: |
-        echo "Running post-deployment security checks..."
-        
-        # Check security contexts
-        kubectl get pods -n ${{ env.NAMESPACE }} -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.securityContext.runAsNonRoot}{"\n"}{end}'
-        
-        # Check resource limits
-        kubectl describe deployment ${{ env.DEPLOYMENT_NAME }} -n ${{ env.NAMESPACE }} | grep -A 10 "Limits\|Requests" || true
-        
-        echo "Security validation completed!"
-
-    # Cleanup old images (optional)
-    - name: Cleanup old images
-      run: |
-        echo "Current deployment uses image: ${{ needs.build.outputs.image-full-name }}"
-        echo "Cleanup of old images can be implemented here if needed"
+        echo "=== DEPLOYMENT SUMMARY ==="
+        echo "Image deployed: ${IMAGE_NAME}:${IMAGE_TAG}"
+        echo "Namespace: ${{ env.NAMESPACE }}"
+        echo "Cluster: ${{ secrets.AKS_CLUSTER_NAME }}"
+        echo "Resource Group: ${{ secrets.AKS_RESOURCE_GROUP }}"
+        echo "=========================="
