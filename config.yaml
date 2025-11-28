@@ -1,0 +1,15 @@
+displayName: adodotnetscriptlt
+testPlan: url_test.jmx
+description: ''
+engineInstances: 1
+testId: ado
+testType: JMX
+splitAllCSVs: False
+failureCriteria:
+  - max(response_time_ms) > 500
+  - percentage(error) > 80
+  # - GetCustomerDetails: avg(latency) >200
+autoStop:
+  errorPercentage: 80
+  timeWindow: 60
+
