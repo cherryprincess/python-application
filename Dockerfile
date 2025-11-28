@@ -1,5 +1,5 @@
 # Use specific Python version with slim variant for smaller image size
-FROM python:3.11.9-slim-bookworm AS base
+FROM python:3.12.7-slim-bookworm AS base
 
 # Add metadata labels
 LABEL maintainer="DevSecOps Team"
@@ -22,9 +22,10 @@ RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
-        curl && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+        curl \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+        && rm -rf /var/cache/apt/archives/*
 
 # Set working directory
 WORKDIR /app
