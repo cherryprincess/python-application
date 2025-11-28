@@ -1,0 +1,50 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: python-app-network-policy
+  namespace: github-copilot-ns
+spec:
+  podSelector:
+    matchLabels:
+      app: python-app
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress rules - what can access this pod
+  ingress:
+  - from:
+    # Allow traffic from pods in the same namespace
+    - namespaceSelector:
+        matchLabels:
+          name: github-copilot-ns
+    # Allow traffic from ingress controllers (if using ingress)
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+  
+  # Egress rules - what this pod can access
+  egress:
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow external HTTPS traffic (for API calls, if needed)
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow HTTP traffic within cluster
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 80
