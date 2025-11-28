@@ -207,23 +207,38 @@ jobs:
           kubectl apply -f k8s/configmap.yaml --namespace=${{ env.NAMESPACE }}
           echo "ConfigMap deployed successfully"
       
-      # Step 9: Update deployment with new image
-      - name: Update deployment image
+      # Step 9: Create image pull secret for ACR
+      - name: Configure ACR access
         run: |
-          # Update the deployment.yaml with the new image tag
-          sed -i "s|image: app_image|image: ${{ needs.build.outputs.image-name }}:${{ needs.build.outputs.image-tag }}|g" k8s/deployment.yaml
+          # Delete existing secret if it exists (to update credentials)
+          kubectl delete secret acr-secret --namespace=${{ env.NAMESPACE }} 2>/dev/null || true
           
-          # Display the updated deployment for verification
-          echo "Updated deployment.yaml:"
-          cat k8s/deployment.yaml | grep -A 2 "image:"
+          # Create the secret
+          kubectl create secret docker-registry acr-secret \
+            --docker-server=${{ secrets.REGISTRY_LOGIN_SERVER }} \
+            --docker-username=${{ secrets.REGISTRY_USERNAME }} \
+            --docker-password=${{ secrets.REGISTRY_PASSWORD }} \
+            --namespace=${{ env.NAMESPACE }}
+          
+          echo "ACR secret created successfully"
       
       # Step 10: Deploy application to AKS
       - name: Deploy to AKS
         run: |
-          kubectl apply -f k8s/deployment.yaml --namespace=${{ env.NAMESPACE }}
+          # Apply service and network policy first
           kubectl apply -f k8s/service.yaml --namespace=${{ env.NAMESPACE }}
           kubectl apply -f k8s/network-policy.yaml --namespace=${{ env.NAMESPACE }}
+          
+          # Apply deployment (this creates/updates the deployment with nginx placeholder)
+          kubectl apply -f k8s/deployment.yaml --namespace=${{ env.NAMESPACE }}
+          
+          # Now update the image to the actual built image
+          kubectl set image deployment/python-app-deployment \
+            python-app=${{ needs.build.outputs.image-name }}:${{ needs.build.outputs.image-tag }} \
+            --namespace=${{ env.NAMESPACE }}
+          
           echo "Application deployed to AKS successfully"
+          echo "Image: ${{ needs.build.outputs.image-name }}:${{ needs.build.outputs.image-tag }}"
       
       # Step 11: Wait for deployment rollout
       - name: Wait for deployment
