@@ -229,13 +229,12 @@ jobs:
           kubectl apply -f k8s/service.yaml --namespace=${{ env.NAMESPACE }}
           kubectl apply -f k8s/network-policy.yaml --namespace=${{ env.NAMESPACE }}
           
-          # Apply deployment (this creates/updates the deployment with nginx placeholder)
-          kubectl apply -f k8s/deployment.yaml --namespace=${{ env.NAMESPACE }}
+          # Create a temporary deployment file with the correct image
+          cp k8s/deployment.yaml /tmp/deployment-temp.yaml
+          sed -i "s|image: nginx:alpine|image: ${{ needs.build.outputs.image-name }}:${{ needs.build.outputs.image-tag }}|g" /tmp/deployment-temp.yaml
           
-          # Now update the image to the actual built image
-          kubectl set image deployment/python-app-deployment \
-            python-app=${{ needs.build.outputs.image-name }}:${{ needs.build.outputs.image-tag }} \
-            --namespace=${{ env.NAMESPACE }}
+          # Apply the updated deployment
+          kubectl apply -f /tmp/deployment-temp.yaml --namespace=${{ env.NAMESPACE }}
           
           echo "Application deployed to AKS successfully"
           echo "Image: ${{ needs.build.outputs.image-name }}:${{ needs.build.outputs.image-tag }}"

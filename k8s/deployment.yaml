@@ -33,9 +33,13 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       
+      # Image pull secrets for ACR
+      imagePullSecrets:
+      - name: acr-secret
+      
       containers:
       - name: python-app
-        image: app_image
+        image: python:3.12.7-slim-bookworm
         imagePullPolicy: Always
         
         # Security context for container
