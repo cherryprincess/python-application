@@ -1,0 +1,254 @@
+name: CI/CD Pipeline with Security Scanning
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+
+env:
+  REGISTRY_NAME: ${{ secrets.REGISTRY_LOGIN_SERVER }}
+  AKS_CLUSTER_NAME: ${{ secrets.AKS_CLUSTER_NAME }}
+  AKS_RESOURCE_GROUP: ${{ secrets.AKS_RESOURCE_GROUP }}
+  NAMESPACE: github-copilot-ns
+
+jobs:
+  build:
+    name: Build and Security Scan
+    runs-on: ubuntu-latest
+    
+    outputs:
+      image-tag: ${{ steps.build-info.outputs.image-tag }}
+      image-name: ${{ steps.build-info.outputs.image-name }}
+    
+    steps:
+      # Step 1: Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      # Step 2: Generate build information
+      - name: Generate build information
+        id: build-info
+        run: |
+          IMAGE_TAG="${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          IMAGE_NAME="${{ secrets.REGISTRY_LOGIN_SERVER }}/python-app"
+          echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "image-name=$IMAGE_NAME" >> $GITHUB_OUTPUT
+          echo "Build ID: $IMAGE_TAG"
+          echo "Image Name: $IMAGE_NAME"
+      
+      # Step 3: Install Azure CLI
+      - name: Install Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          az --version
+      
+      # Step 4: Install additional dependencies
+      - name: Install additional dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl wget
+      
+      # Step 5: Install Trivy security scanner
+      - name: Install Trivy
+        run: |
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+          trivy --version
+      
+      # Step 6: Login to Azure
+      - name: Azure Login
+        run: |
+          az login --service-principal \
+            --username ${{ secrets.AZURE_CLIENT_ID }} \
+            --password ${{ secrets.AZURE_CLIENT_SECRET }} \
+            --tenant ${{ secrets.AZURE_TENANT_ID }}
+          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          echo "Azure login successful"
+      
+      # Step 7: Login to Azure Container Registry
+      - name: Login to ACR
+        run: |
+          echo ${{ secrets.REGISTRY_PASSWORD }} | docker login ${{ secrets.REGISTRY_LOGIN_SERVER }} \
+            --username ${{ secrets.REGISTRY_USERNAME }} \
+            --password-stdin
+          echo "ACR login successful"
+      
+      # Step 8: Build Docker image
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ steps.build-info.outputs.image-name }}:${{ steps.build-info.outputs.image-tag }} \
+            -t ${{ steps.build-info.outputs.image-name }}:latest \
+            .
+          echo "Docker image built successfully"
+      
+      # Step 9: Scan Docker image for vulnerabilities with Trivy
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.build-info.outputs.image-name }}:${{ steps.build-info.outputs.image-tag }}
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+          output: 'trivy-report.txt'
+      
+      # Step 10: Upload Trivy scan results
+      - name: Upload Trivy scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-scan-report
+          path: trivy-report.txt
+          retention-days: 30
+      
+      # Step 11: Push Docker image to ACR
+      - name: Push Docker image to ACR
+        run: |
+          docker push ${{ steps.build-info.outputs.image-name }}:${{ steps.build-info.outputs.image-tag }}
+          docker push ${{ steps.build-info.outputs.image-name }}:latest
+          echo "Docker images pushed to ACR successfully"
+      
+      # Step 12: Display build summary
+      - name: Build summary
+        run: |
+          echo "### Build Summary :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** ${{ steps.build-info.outputs.image-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** ${{ steps.build-info.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** ${{ secrets.REGISTRY_LOGIN_SERVER }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Security scan completed with Trivy" >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: Deploy to AKS
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    
+    steps:
+      # Step 1: Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      # Step 2: Install Azure CLI
+      - name: Install Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          az --version
+      
+      # Step 3: Install kubectl
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+          kubectl version --client
+      
+      # Step 4: Login to Azure
+      - name: Azure Login
+        run: |
+          az login --service-principal \
+            --username ${{ secrets.AZURE_CLIENT_ID }} \
+            --password ${{ secrets.AZURE_CLIENT_SECRET }} \
+            --tenant ${{ secrets.AZURE_TENANT_ID }}
+          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          echo "Azure login successful"
+      
+      # Step 5: Get AKS credentials
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
+            --name ${{ secrets.AKS_CLUSTER_NAME }} \
+            --overwrite-existing
+          echo "AKS credentials retrieved successfully"
+      
+      # Step 6: Verify kubectl connection
+      - name: Verify kubectl connection
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+      
+      # Step 7: Create namespace if not exists
+      - name: Create namespace
+        run: |
+          kubectl get namespace ${{ env.NAMESPACE }} || kubectl create namespace ${{ env.NAMESPACE }}
+          kubectl label namespace ${{ env.NAMESPACE }} name=${{ env.NAMESPACE }} environment=production --overwrite
+          echo "Namespace ${{ env.NAMESPACE }} is ready"
+      
+      # Step 8: Create or update ConfigMap
+      - name: Deploy ConfigMap
+        run: |
+          kubectl apply -f k8s/configmap.yaml --namespace=${{ env.NAMESPACE }}
+          echo "ConfigMap deployed successfully"
+      
+      # Step 9: Update deployment with new image
+      - name: Update deployment image
+        run: |
+          # Update the deployment.yaml with the new image tag
+          sed -i "s|image: app_image|image: ${{ needs.build.outputs.image-name }}:${{ needs.build.outputs.image-tag }}|g" k8s/deployment.yaml
+          
+          # Display the updated deployment for verification
+          echo "Updated deployment.yaml:"
+          cat k8s/deployment.yaml | grep -A 2 "image:"
+      
+      # Step 10: Deploy application to AKS
+      - name: Deploy to AKS
+        run: |
+          kubectl apply -f k8s/deployment.yaml --namespace=${{ env.NAMESPACE }}
+          kubectl apply -f k8s/service.yaml --namespace=${{ env.NAMESPACE }}
+          kubectl apply -f k8s/network-policy.yaml --namespace=${{ env.NAMESPACE }}
+          echo "Application deployed to AKS successfully"
+      
+      # Step 11: Wait for deployment rollout
+      - name: Wait for deployment
+        run: |
+          kubectl rollout status deployment/python-app-deployment \
+            --namespace=${{ env.NAMESPACE }} \
+            --timeout=5m
+          echo "Deployment rollout completed"
+      
+      # Step 12: Verify deployment
+      - name: Verify deployment
+        run: |
+          echo "### Deployment Verification" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Get deployment status
+          kubectl get deployment python-app-deployment --namespace=${{ env.NAMESPACE }}
+          
+          # Get pods
+          echo "**Pods:**" >> $GITHUB_STEP_SUMMARY
+          kubectl get pods --namespace=${{ env.NAMESPACE }} -l app=python-app
+          kubectl get pods --namespace=${{ env.NAMESPACE }} -l app=python-app >> $GITHUB_STEP_SUMMARY
+          
+          # Get service
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:**" >> $GITHUB_STEP_SUMMARY
+          kubectl get service python-app-service --namespace=${{ env.NAMESPACE }}
+          kubectl get service python-app-service --namespace=${{ env.NAMESPACE }} >> $GITHUB_STEP_SUMMARY
+          
+          # Check pod health
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pod Health:**" >> $GITHUB_STEP_SUMMARY
+          kubectl describe pods --namespace=${{ env.NAMESPACE }} -l app=python-app | grep -E "Status:|Ready:|Restart Count:"
+      
+      # Step 13: Deployment summary
+      - name: Deployment summary
+        run: |
+          echo "### Deployment Summary :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** Production" >> $GITHUB_STEP_SUMMARY
+          echo "**Namespace:** ${{ env.NAMESPACE }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster:** ${{ secrets.AKS_CLUSTER_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** ${{ needs.build.outputs.image-name }}:${{ needs.build.outputs.image-tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Replicas:** 2" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Deployment completed successfully!" >> $GITHUB_STEP_SUMMARY
